@@ -34,4 +34,4 @@ jobs:
         SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
         SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
         SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
-      run: cargo run --release -- --dry-run
+      run: cargo run --release
