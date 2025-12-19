@@ -10,7 +10,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  FILTER_LOCATION: ""  # Set to a location/street name to filter (e.g., "Valen"), or leave empty for all outages
 
 jobs:
   check-outages:
@@ -35,6 +34,7 @@ jobs:
         SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
         SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
         SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+        FILTER_LOCATION: ${{ secrets.FILTER_LOCATION }}
       run: |
         if [ -n "$FILTER_LOCATION" ]; then
           cargo run --release -- --filter "$FILTER_LOCATION"
