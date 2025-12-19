@@ -17,13 +17,21 @@ struct Args {
     filter: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default, Clone)]
 struct PowerOutage {
     date: String,
     location: String,
     street: String,
     time: String,
     note: String,
+}
+
+struct EmailConfig<'a> {
+    to_email: &'a str,
+    from_email: &'a str,
+    smtp_username: &'a str,
+    smtp_password: &'a str,
+    smtp_server: &'a str,
 }
 
 fn fetch_page(date: &str, city: &str, office: &str) -> Result<String, Box<dyn std::error::Error>> {
@@ -72,9 +80,7 @@ fn parse_outages(html: &str) -> Result<Vec<PowerOutage>, Box<dyn std::error::Err
             current_outage = Some(PowerOutage {
                 date: date.clone(),
                 location: line.replace("Mjesto:", "").trim().to_string(),
-                street: String::new(),
-                time: String::new(),
-                note: String::new(),
+                ..Default::default()
             });
             expect_time_next = false;
         } else if line.starts_with("Ulica:") {
@@ -118,11 +124,7 @@ fn parse_outages(html: &str) -> Result<Vec<PowerOutage>, Box<dyn std::error::Err
 
 fn send_email(
     outages: &[PowerOutage],
-    to_email: &str,
-    from_email: &str,
-    smtp_username: &str,
-    smtp_password: &str,
-    smtp_server: &str,
+    email_config: &EmailConfig,
     filter: &Option<String>,
     city: &str,
     office: &str,
@@ -155,15 +157,18 @@ fn send_email(
     };
 
     let email = Message::builder()
-        .from(from_email.parse()?)
-        .to(to_email.parse()?)
+        .from(email_config.from_email.parse()?)
+        .to(email_config.to_email.parse()?)
         .subject(subject)
         .header(ContentType::TEXT_PLAIN)
         .body(body)?;
-    
-    let creds = Credentials::new(smtp_username.to_string(), smtp_password.to_string());
-    
-    let mailer = SmtpTransport::relay(smtp_server)?
+
+    let creds = Credentials::new(
+        email_config.smtp_username.to_string(),
+        email_config.smtp_password.to_string(),
+    );
+
+    let mailer = SmtpTransport::relay(email_config.smtp_server)?
         .credentials(creds)
         .build();
     
@@ -186,6 +191,125 @@ fn filter_outages<'a>(outages: &'a [PowerOutage], filter: &Option<String>) -> Ve
         }
         None => outages.iter().collect(),
     }
+}
+
+fn load_hep_config() -> (String, String) {
+    let city = env::var("HEP_CITY").expect("HEP_CITY must be set");
+    let office = env::var("HEP_OFFICE").expect("HEP_OFFICE must be set");
+    (city, office)
+}
+
+fn load_email_config(dry_run: bool) -> (String, String, String, String, String) {
+    if dry_run {
+        return (String::new(), String::new(), String::new(), String::new(), String::new());
+    }
+
+    let to_email = env::var("TO_EMAIL").expect("TO_EMAIL must be set");
+    let from_email = env::var("FROM_EMAIL").expect("FROM_EMAIL must be set");
+    let smtp_username = env::var("SMTP_USERNAME").expect("SMTP_USERNAME must be set");
+    let smtp_password = env::var("SMTP_PASSWORD").expect("SMTP_PASSWORD must be set");
+    let smtp_server = env::var("SMTP_SERVER").unwrap_or_else(|_| "smtp.gmail.com".to_string());
+
+    (to_email, from_email, smtp_username, smtp_password, smtp_server)
+}
+
+fn check_outages_for_dates(city: &str, office: &str, days: i64) -> Vec<PowerOutage> {
+    let today = Local::now();
+    let mut all_outages = Vec::new();
+
+    for days_ahead in 0..=days {
+        let check_date = today + Duration::days(days_ahead);
+        let date_str = check_date.format("%d.%m.%Y").to_string();
+
+        println!("\n📅 Checking date: {}", date_str);
+
+        match fetch_page(&date_str, city, office) {
+            Ok(html) => {
+                match parse_outages(&html) {
+                    Ok(outages) => {
+                        if !outages.is_empty() {
+                            println!("   ⚠️  Found {} outage(s)", outages.len());
+                            for outage in &outages {
+                                println!("      - {}: {}", outage.location, outage.time);
+                            }
+                            all_outages.extend(outages);
+                        } else {
+                            println!("   ✅ No outages scheduled");
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("   ❌ Error parsing outages: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("   ❌ Error fetching page: {}", e);
+            }
+        }
+
+        // Small delay to be nice to the server
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+
+    all_outages
+}
+
+fn handle_results(
+    filtered_outages: Vec<&PowerOutage>,
+    all_outages_count: usize,
+    args: &Args,
+    email_config: (String, String, String, String, String),
+    hep_city: &str,
+    hep_office: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if args.filter.is_some() {
+        println!(
+            "\n🔍 Filter applied: '{}' - {} of {} outage(s) match",
+            args.filter.as_ref().unwrap(),
+            filtered_outages.len(),
+            all_outages_count
+        );
+    }
+
+    if args.dry_run {
+        let outages_to_print: Vec<PowerOutage> = filtered_outages
+            .iter()
+            .map(|&outage| outage.clone())
+            .collect();
+        print_outages_detailed(&outages_to_print, hep_city, hep_office);
+    } else if !filtered_outages.is_empty() {
+        println!("\n📧 Sending email notification...");
+        let outages_to_send: Vec<PowerOutage> = filtered_outages
+            .iter()
+            .map(|&outage| outage.clone())
+            .collect();
+
+        let (to_email, from_email, smtp_username, smtp_password, smtp_server) = email_config;
+        let email_cfg = EmailConfig {
+            to_email: &to_email,
+            from_email: &from_email,
+            smtp_username: &smtp_username,
+            smtp_password: &smtp_password,
+            smtp_server: &smtp_server,
+        };
+
+        match send_email(
+            &outages_to_send,
+            &email_cfg,
+            &args.filter,
+            hep_city,
+            hep_office,
+        ) {
+            Ok(_) => println!("✅ Email sent successfully!"),
+            Err(e) => eprintln!("❌ Failed to send email: {}", e),
+        }
+    } else if args.filter.is_some() {
+        println!("\n✅ No matching outages found. No email sent.");
+    } else {
+        println!("\n✅ No outages found in the next 7 days. No email sent.");
+    }
+
+    Ok(())
 }
 
 fn print_outages_detailed(outages: &[PowerOutage], city: &str, office: &str) {
@@ -223,134 +347,31 @@ fn print_outages_detailed(outages: &[PowerOutage], city: &str, office: &str) {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    // Get environment variables (only required if not in dry-run mode)
-    let to_email = if args.dry_run {
-        String::new()
-    } else {
-        env::var("TO_EMAIL").expect("TO_EMAIL must be set")
-    };
-    let from_email = if args.dry_run {
-        String::new()
-    } else {
-        env::var("FROM_EMAIL").expect("FROM_EMAIL must be set")
-    };
-    let smtp_username = if args.dry_run {
-        String::new()
-    } else {
-        env::var("SMTP_USERNAME").expect("SMTP_USERNAME must be set")
-    };
-    let smtp_password = if args.dry_run {
-        String::new()
-    } else {
-        env::var("SMTP_PASSWORD").expect("SMTP_PASSWORD must be set")
-    };
-    let smtp_server = env::var("SMTP_SERVER").unwrap_or_else(|_| "smtp.gmail.com".to_string());
+    // Load configuration
+    let email_config = load_email_config(args.dry_run);
+    let (hep_city, hep_office) = load_hep_config();
 
-    // Get HEP location parameters
-    let hep_city = env::var("HEP_CITY").expect("HEP_CITY must be set");
-    let hep_office = env::var("HEP_OFFICE").expect("HEP_OFFICE must be set");
-
+    // Print startup message
     println!("🔍 HEP Outage Checker starting...");
     if args.dry_run {
         println!("🔍 Mode: DRY RUN (no email will be sent)");
     } else {
-        println!("📧 Will notify: {}", to_email);
+        println!("📧 Will notify: {}", email_config.0);
     }
-    
-    // Check today and the next 7 days
-    let today = Local::now();
-    let mut all_outages = Vec::new();
-    
-    for days_ahead in 0..=7 {
-        let check_date = today + Duration::days(days_ahead);
-        let date_str = check_date.format("%d.%m.%Y").to_string();
-        
-        println!("\n📅 Checking date: {}", date_str);
 
-        match fetch_page(&date_str, &hep_city, &hep_office) {
-            Ok(html) => {
-                match parse_outages(&html) {
-                    Ok(outages) => {
-                        if !outages.is_empty() {
-                            println!("   ⚠️  Found {} outage(s)", outages.len());
-                            for outage in &outages {
-                                println!("      - {}: {}", outage.location, outage.time);
-                            }
-                            all_outages.extend(outages);
-                        } else {
-                            println!("   ✅ No outages scheduled");
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("   ❌ Error parsing outages: {}", e);
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("   ❌ Error fetching page: {}", e);
-            }
-        }
-        
-        // Small delay to be nice to the server
-        std::thread::sleep(std::time::Duration::from_millis(500));
-    }
-    
+    // Check outages for the next 7 days
+    let all_outages = check_outages_for_dates(&hep_city, &hep_office, 7);
+
     // Apply filter if provided
     let filtered_outages = filter_outages(&all_outages, &args.filter);
 
-    if args.filter.is_some() {
-        println!(
-            "\n🔍 Filter applied: '{}' - {} of {} outage(s) match",
-            args.filter.as_ref().unwrap(),
-            filtered_outages.len(),
-            all_outages.len()
-        );
-    }
-
-    if args.dry_run {
-        // Convert Vec<&PowerOutage> to Vec<PowerOutage> for printing
-        let outages_to_print: Vec<PowerOutage> = filtered_outages
-            .iter()
-            .map(|&outage| PowerOutage {
-                date: outage.date.clone(),
-                location: outage.location.clone(),
-                street: outage.street.clone(),
-                time: outage.time.clone(),
-                note: outage.note.clone(),
-            })
-            .collect();
-        print_outages_detailed(&outages_to_print, &hep_city, &hep_office);
-    } else if !filtered_outages.is_empty() {
-        println!("\n📧 Sending email notification...");
-        let outages_to_send: Vec<PowerOutage> = filtered_outages
-            .iter()
-            .map(|&outage| PowerOutage {
-                date: outage.date.clone(),
-                location: outage.location.clone(),
-                street: outage.street.clone(),
-                time: outage.time.clone(),
-                note: outage.note.clone(),
-            })
-            .collect();
-        match send_email(
-            &outages_to_send,
-            &to_email,
-            &from_email,
-            &smtp_username,
-            &smtp_password,
-            &smtp_server,
-            &args.filter,
-            &hep_city,
-            &hep_office,
-        ) {
-            Ok(_) => println!("✅ Email sent successfully!"),
-            Err(e) => eprintln!("❌ Failed to send email: {}", e),
-        }
-    } else if args.filter.is_some() {
-        println!("\n✅ No matching outages found. No email sent.");
-    } else {
-        println!("\n✅ No outages found in the next 7 days. No email sent.");
-    }
-    
-    Ok(())
+    // Handle the results (print or send email)
+    handle_results(
+        filtered_outages,
+        all_outages.len(),
+        &args,
+        email_config,
+        &hep_city,
+        &hep_office,
+    )
 }
