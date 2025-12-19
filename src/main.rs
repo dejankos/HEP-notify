@@ -320,40 +320,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .collect();
         print_outages_detailed(&outages_to_print, &hep_city, &hep_office);
-    } else {
-        if !filtered_outages.is_empty() {
-            println!("\n📧 Sending email notification...");
-            let outages_to_send: Vec<PowerOutage> = filtered_outages
-                .iter()
-                .map(|&outage| PowerOutage {
-                    date: outage.date.clone(),
-                    location: outage.location.clone(),
-                    street: outage.street.clone(),
-                    time: outage.time.clone(),
-                    note: outage.note.clone(),
-                })
-                .collect();
-            match send_email(
-                &outages_to_send,
-                &to_email,
-                &from_email,
-                &smtp_username,
-                &smtp_password,
-                &smtp_server,
-                &args.filter,
-                &hep_city,
-                &hep_office,
-            ) {
-                Ok(_) => println!("✅ Email sent successfully!"),
-                Err(e) => eprintln!("❌ Failed to send email: {}", e),
-            }
-        } else {
-            if args.filter.is_some() {
-                println!("\n✅ No matching outages found. No email sent.");
-            } else {
-                println!("\n✅ No outages found in the next 7 days. No email sent.");
-            }
+    } else if !filtered_outages.is_empty() {
+        println!("\n📧 Sending email notification...");
+        let outages_to_send: Vec<PowerOutage> = filtered_outages
+            .iter()
+            .map(|&outage| PowerOutage {
+                date: outage.date.clone(),
+                location: outage.location.clone(),
+                street: outage.street.clone(),
+                time: outage.time.clone(),
+                note: outage.note.clone(),
+            })
+            .collect();
+        match send_email(
+            &outages_to_send,
+            &to_email,
+            &from_email,
+            &smtp_username,
+            &smtp_password,
+            &smtp_server,
+            &args.filter,
+            &hep_city,
+            &hep_office,
+        ) {
+            Ok(_) => println!("✅ Email sent successfully!"),
+            Err(e) => eprintln!("❌ Failed to send email: {}", e),
         }
+    } else if args.filter.is_some() {
+        println!("\n✅ No matching outages found. No email sent.");
+    } else {
+        println!("\n✅ No outages found in the next 7 days. No email sent.");
     }
     
     Ok(())
