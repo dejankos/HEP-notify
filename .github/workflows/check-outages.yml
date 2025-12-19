@@ -35,6 +35,8 @@ jobs:
         SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
         SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
         FILTER_LOCATION: ${{ secrets.FILTER_LOCATION }}
+        HEP_CITY: ${{ secrets.HEP_CITY }}
+        HEP_OFFICE: ${{ secrets.HEP_OFFICE }}
       run: |
         if [ -n "$FILTER_LOCATION" ]; then
           cargo run --release -- --filter "$FILTER_LOCATION"

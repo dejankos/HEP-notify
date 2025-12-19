@@ -26,19 +26,19 @@ struct PowerOutage {
     note: String,
 }
 
-fn fetch_page(date: &str) -> Result<String, Box<dyn std::error::Error>> {
+fn fetch_page(date: &str, city: &str, office: &str) -> Result<String, Box<dyn std::error::Error>> {
     let url = format!(
-        "https://www.hep.hr/ods/bez-struje/19?dp=pula&el=128&datum={}",
-        date
+        "https://www.hep.hr/ods/bez-struje/19?dp={}&el={}&datum={}",
+        city, office, date
     );
-    
+
     let client = reqwest::blocking::Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         .build()?;
-    
+
     let response = client.get(&url).send()?;
     let html = response.text()?;
-    
+
     Ok(html)
 }
 
@@ -124,6 +124,8 @@ fn send_email(
     smtp_password: &str,
     smtp_server: &str,
     filter: &Option<String>,
+    city: &str,
+    office: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut body = String::from("⚡ PLANNED POWER OUTAGES IN YOUR AREA ⚡\n\n");
     body.push_str(&format!("Found {} scheduled outage(s):\n\n", outages.len()));
@@ -142,11 +144,14 @@ fn send_email(
     
     body.push_str("\n---\n");
     body.push_str("This is an automated notification from HEP Outage Checker\n");
-    body.push_str("Source: https://www.hep.hr/ods/bez-struje/19?dp=pula&el=128\n");
+    body.push_str(&format!(
+        "Source: https://www.hep.hr/ods/bez-struje/19?dp={}&el={}\n",
+        city, office
+    ));
 
     let subject = match filter {
-        Some(location) => format!("⚡ Power Outage Alert - {} - HEP Poreč", location),
-        None => "⚡ Power Outage Alert - HEP Poreč".to_string(),
+        Some(location) => format!("⚡ Power Outage Alert - {}", location),
+        None => "⚡ Power Outage Alert".to_string(),
     };
 
     let email = Message::builder()
@@ -183,7 +188,7 @@ fn filter_outages<'a>(outages: &'a [PowerOutage], filter: &Option<String>) -> Ve
     }
 }
 
-fn print_outages_detailed(outages: &[PowerOutage]) {
+fn print_outages_detailed(outages: &[PowerOutage], city: &str, office: &str) {
     println!("\n╔════════════════════════════════════════════════════════════════╗");
     println!("║        ⚡ DRY RUN - POWER OUTAGE DATA (NO EMAIL SENT) ⚡        ║");
     println!("╚════════════════════════════════════════════════════════════════╝\n");
@@ -208,7 +213,10 @@ fn print_outages_detailed(outages: &[PowerOutage]) {
     }
 
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("Source: https://www.hep.hr/ods/bez-struje/19?dp=pula&el=128");
+    println!(
+        "Source: https://www.hep.hr/ods/bez-struje/19?dp={}&el={}",
+        city, office
+    );
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 }
 
@@ -238,6 +246,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let smtp_server = env::var("SMTP_SERVER").unwrap_or_else(|_| "smtp.gmail.com".to_string());
 
+    // Get HEP location parameters
+    let hep_city = env::var("HEP_CITY").expect("HEP_CITY must be set");
+    let hep_office = env::var("HEP_OFFICE").expect("HEP_OFFICE must be set");
+
     println!("🔍 HEP Outage Checker starting...");
     if args.dry_run {
         println!("🔍 Mode: DRY RUN (no email will be sent)");
@@ -254,8 +266,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let date_str = check_date.format("%d.%m.%Y").to_string();
         
         println!("\n📅 Checking date: {}", date_str);
-        
-        match fetch_page(&date_str) {
+
+        match fetch_page(&date_str, &hep_city, &hep_office) {
             Ok(html) => {
                 match parse_outages(&html) {
                     Ok(outages) => {
@@ -307,7 +319,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 note: outage.note.clone(),
             })
             .collect();
-        print_outages_detailed(&outages_to_print);
+        print_outages_detailed(&outages_to_print, &hep_city, &hep_office);
     } else {
         if !filtered_outages.is_empty() {
             println!("\n📧 Sending email notification...");
@@ -329,6 +341,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &smtp_password,
                 &smtp_server,
                 &args.filter,
+                &hep_city,
+                &hep_office,
             ) {
                 Ok(_) => println!("✅ Email sent successfully!"),
                 Err(e) => eprintln!("❌ Failed to send email: {}", e),
