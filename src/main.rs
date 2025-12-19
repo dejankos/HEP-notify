@@ -123,6 +123,7 @@ fn send_email(
     smtp_username: &str,
     smtp_password: &str,
     smtp_server: &str,
+    filter: &Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut body = String::from("⚡ PLANNED POWER OUTAGES IN YOUR AREA ⚡\n\n");
     body.push_str(&format!("Found {} scheduled outage(s):\n\n", outages.len()));
@@ -142,11 +143,16 @@ fn send_email(
     body.push_str("\n---\n");
     body.push_str("This is an automated notification from HEP Outage Checker\n");
     body.push_str("Source: https://www.hep.hr/ods/bez-struje/19?dp=pula&el=128\n");
-    
+
+    let subject = match filter {
+        Some(location) => format!("⚡ Power Outage Alert - {} - HEP Poreč", location),
+        None => "⚡ Power Outage Alert - HEP Poreč".to_string(),
+    };
+
     let email = Message::builder()
         .from(from_email.parse()?)
         .to(to_email.parse()?)
-        .subject("⚡ Power Outage Alert - HEP Poreč")
+        .subject(subject)
         .header(ContentType::TEXT_PLAIN)
         .body(body)?;
     
@@ -322,6 +328,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &smtp_username,
                 &smtp_password,
                 &smtp_server,
+                &args.filter,
             ) {
                 Ok(_) => println!("✅ Email sent successfully!"),
                 Err(e) => eprintln!("❌ Failed to send email: {}", e),
