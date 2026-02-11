@@ -2,9 +2,8 @@ name: Check HEP Power Outages
 
 on:
   schedule:
-    # Run at 7 AM and 7 PM Central European Time (UTC+1)
-    # Cron is in UTC, so 6 AM and 6 PM UTC = 7 AM and 7 PM CET
-    - cron: '0 6 * * *'  # 7 AM CET
+    # Run at 7 PM Central European Time (UTC+1)
+    # Cron is in UTC, so 6 PM UTC = 7 PM CET
     - cron: '0 18 * * *' # 7 PM CET
   workflow_dispatch: # Allows manual trigger from GitHub UI
 
